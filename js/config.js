@@ -13,4 +13,11 @@
 //
 // Lämna som null för DEMOLÄGE: allt sparas bara i den här webbläsaren
 // (bra för att testa, men länken fungerar inte för dina vänner).
-export const FIREBASE_CONFIG = null;
+export const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDfoCYnEYLQjytBneOTPuKf-RM_NB1B-Qs",
+  authDomain: "julbordsnotan.firebaseapp.com",
+  projectId: "julbordsnotan",
+  storageBucket: "julbordsnotan.firebasestorage.app",
+  messagingSenderId: "1087993428783",
+  appId: "1:1087993428783:web:69453dd6cd126d639b3fda",
+};
