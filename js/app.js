@@ -1,14 +1,24 @@
-import { getBackend } from './store.js?v=8';
-import { parseReceipt, parseKr } from './parse.js?v=8';
-import { sprite, iconFor } from './sprites.js?v=8';
-import { compute, kr, claimedOf } from './calc.js?v=8';
-import * as audio from './audio.js?v=8';
-import { startSnow, floatText, shake, confetti } from './fx.js?v=8';
+import { getBackend } from './store.js?v=9';
+import { parseReceipt, parseKr } from './parse.js?v=9';
+import { sprite, iconFor } from './sprites.js?v=9';
+import { compute, kr, claimedOf, qty } from './calc.js?v=9';
+import * as audio from './audio.js?v=9';
+import { startSnow, floatText, shake, confetti } from './fx.js?v=9';
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
 // Only touch the DOM when the content really changed (keeps buttons alive, avoids flicker).
 const setHTML = (el, html) => { if (el.__html !== html) { el.__html = html; el.innerHTML = html; } };
+// One square per portion; each half can be mine (m), someone else's (o) or free (f).
+function pipsHTML(mine, others, left) {
+  const halves = [...'m'.repeat(Math.round(mine * 2)), ...'o'.repeat(Math.round(others * 2)), ...'f'.repeat(Math.round(left * 2))];
+  let out = '';
+  for (let i = 0; i < halves.length; i += 2) {
+    const a = halves[i], b = halves[i + 1] || a;
+    out += `<i class="${a === b ? a : a + b}"></i>`;
+  }
+  return out;
+}
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const ls = {
@@ -377,7 +387,7 @@ function renderBill(billId) {
       joinShown = false;
     }
     $('#hello').textContent = joined ? `– du är ${bill.people[me].name}` : '';
-    $('#items-hint').innerHTML = joined ? 'Tryck <b>+</b> på det du åt och drack.' : 'Skriv in ditt namn ovanför för att börja plocka.';
+    $('#items-hint').innerHTML = joined ? 'Tryck <b>+</b> på det du åt och drack – <b>½</b> för en halv (t.ex. en delad flaska).' : 'Skriv in ditt namn ovanför för att börja plocka.';
 
     paintItems(c, joined);
     paintMine(c, meP);
@@ -460,6 +470,7 @@ function renderBill(billId) {
             <button class="pm minus px" data-id="${it.id}" data-d="-1" aria-label="En mindre ${esc(it.name)}">−</button>
             <span class="count px"></span>
             <button class="pm plus px" data-id="${it.id}" data-d="1" aria-label="En till ${esc(it.name)}">+</button>
+            <button class="pm half px" data-id="${it.id}" data-d="half" aria-label="En halv ${esc(it.name)}">½</button>
           </div>`;
         $('.icon', li).appendChild(sprite(iconFor(it.name), 'md'));
         ul.appendChild(li);
@@ -472,24 +483,34 @@ function renderBill(billId) {
       li.classList.toggle('soldout', it.left === 0);
       li.classList.toggle('has', mine > 0);
       const left = $('.left', li);
-      left.textContent = it.left ? `${it.left} av ${it.qty} kvar` : 'SLUT!';
+      left.textContent = it.left ? `${qty(it.left)} av ${it.qty} kvar` : 'SLUT!';
       left.classList.toggle('bad', !it.left);
-      const pips = it.qty <= 24 ? '<i class="me"></i>'.repeat(mine) + '<i class="other"></i>'.repeat(others) + '<i></i>'.repeat(it.left) : '';
+      const pips = it.qty <= 24 ? pipsHTML(mine, others, it.left) : '';
       const pipsEl = $('.pips', li);
       if (pipsEl.innerHTML !== pips) pipsEl.innerHTML = pips;
-      $('.count', li).textContent = mine;
-      $('.count', li).setAttribute('aria-label', `Du har ${mine}`);
+      $('.count', li).textContent = qty(mine);
+      $('.count', li).setAttribute('aria-label', `Du har ${qty(mine)}`);
       $('.minus', li).disabled = !joined || !mine;
-      $('.plus', li).disabled = !joined || !it.left;
+      $('.plus', li).disabled = !joined || it.left < 1;
+      const hasHalf = mine % 1 !== 0;
+      const half = $('.half', li);
+      half.disabled = !joined || (!hasHalf && it.left < 0.5);
+      half.classList.toggle('on', hasHalf);
+      half.setAttribute('aria-label', hasHalf ? `Ta bort halv ${it.name}` : `En halv ${it.name}`);
     }
     ul.onclick = async (e) => {
       const b = e.target.closest('.pm');
       if (!b || b.disabled) return;
       const itemId = b.dataset.id;
-      const d = +b.dataset.d;
       const item = bill.items.find((i) => i.id === itemId);
       const pid = me;
-      const want = ((bill.people[pid].claims || {})[itemId] || 0) + d;
+      const cur0 = (bill.people[pid].claims || {})[itemId] || 0;
+      // +: one more · −: one less (or the last half) · ½: add a half, or remove the half you have
+      let d;
+      if (b.dataset.d === 'half') d = cur0 % 1 ? -0.5 : 0.5;
+      else if (b.dataset.d === '-1') d = cur0 >= 1 ? -1 : -cur0;
+      else d = 1;
+      const want = cur0 + d;
       try {
         change((fresh) => {
           const p = fresh.people[pid];
@@ -509,7 +530,7 @@ function renderBill(billId) {
         return;
       }
       audio.play(d > 0 ? 'up' : 'down');
-      floatText(b, `${d > 0 ? '+' : '−'}${kr(item.unitOre)}`, d > 0 ? '' : 'bad');
+      floatText(b, `${d > 0 ? '+' : '−'}${kr(Math.round(Math.abs(d) * item.unitOre))}`, d > 0 ? '' : 'bad');
     };
   }
 
@@ -533,7 +554,7 @@ function renderBill(billId) {
     setHTML(box, `
       <h2 class="px h">DIN NOTA</h2>
       <div class="receipt">
-        ${c.items.filter((i) => (meP.claims || {})[i.id]).map((i) => `<div class="rl"><span>${meP.claims[i.id]} × ${esc(i.name)}</span><span>${kr(meP.claims[i.id] * i.unitOre)}</span></div>`).join('') || '<div class="muted">Inget plockat ännu.</div>'}
+        ${c.items.filter((i) => (meP.claims || {})[i.id]).map((i) => `<div class="rl"><span>${qty(meP.claims[i.id])} × ${esc(i.name)}</span><span>${kr(Math.round(meP.claims[i.id] * i.unitOre))}</span></div>`).join('') || '<div class="muted">Inget plockat ännu.</div>'}
         ${meP.tipOre ? `<div class="rl muted"><span>Din del av dricksen</span><span>${kr(meP.tipOre)}</span></div>` : ''}
         <div class="rl total"><span>SUMMA</span><span>${kr(meP.owedOre)}</span></div>
         ${paid ? `<div class="rl ok"><span>Redan swishat</span><span>−${kr(paid)}</span></div>` : ''}

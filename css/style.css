@@ -298,3 +298,13 @@ input:focus, textarea:focus { outline: 3px solid var(--gold); outline-offset: 3p
 }
 .chip.wait { animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { color: var(--cream); background: var(--red); } }
+
+/* ---------- half portions ---------- */
+.pips i.m { background: var(--gold); box-shadow: none; }
+.pips i.o { background: var(--muted); box-shadow: none; }
+.pips i.mo { background: linear-gradient(90deg, var(--gold) 50%, var(--muted) 50%); box-shadow: none; }
+.pips i.mf { background: linear-gradient(90deg, var(--gold) 50%, transparent 50%); }
+.pips i.of { background: linear-gradient(90deg, var(--muted) 50%, transparent 50%); }
+.pm.half { background: var(--night3); font-size: 13px; box-shadow: inset -3px -3px 0 var(--night), inset 3px 3px 0 var(--edge), 0 0 0 3px var(--ink); }
+.pm.half.on { background: var(--gold); color: var(--ink); box-shadow: inset -3px -3px 0 #b8892a, inset 3px 3px 0 #ffe08a, 0 0 0 3px var(--ink); }
+.count { min-width: 40px; }

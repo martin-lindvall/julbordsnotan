@@ -5,6 +5,13 @@ export function kr(ore, { decimals } = {}) {
   return (ore / 100).toLocaleString('sv-SE', { minimumFractionDigits: d, maximumFractionDigits: d }) + ' kr';
 }
 
+// 1.5 -> "1½", 0.5 -> "½", 2 -> "2"
+export function qty(n) {
+  const whole = Math.floor(n + 1e-9);
+  const half = n - whole > 0.25;
+  return half ? (whole ? whole + '½' : '½') : String(whole);
+}
+
 export function claimedOf(bill, itemId) {
   return Object.values(bill.people || {}).reduce((s, p) => s + ((p.claims || {})[itemId] || 0), 0);
 }
@@ -17,7 +24,8 @@ export function compute(bill) {
   const byId = Object.fromEntries(items.map((i) => [i.id, i]));
   const people = Object.entries(bill.people || {})
     .map(([id, p]) => {
-      const itemsOre = Object.entries(p.claims || {}).reduce((s, [iid, n]) => s + (byId[iid] ? byId[iid].unitOre * n : 0), 0);
+      // claims may be halves (0.5, 1.5 …); round to whole öre
+      const itemsOre = Math.round(Object.entries(p.claims || {}).reduce((s, [iid, n]) => s + (byId[iid] ? byId[iid].unitOre * n : 0), 0));
       const count = Object.values(p.claims || {}).reduce((s, n) => s + n, 0);
       return { id, ...p, itemsOre, count, tipOre: 0 };
     })
@@ -39,7 +47,7 @@ export function compute(bill) {
   }
   const itemsTotalOre = items.reduce((s, i) => s + i.qty * i.unitOre, 0);
   const totalOre = itemsTotalOre + tip;
-  const unclaimedOre = items.reduce((s, i) => s + i.left * i.unitOre, 0) + (eaters.length ? 0 : tip);
+  const unclaimedOre = Math.round(items.reduce((s, i) => s + i.left * i.unitOre, 0)) + (eaters.length ? 0 : tip);
   const unswishedOre = people.reduce((s, p) => s + p.unpaidOre, 0);
   const leftOre = unclaimedOre + unswishedOre;
   return { items, people, itemsTotalOre, totalOre, unclaimedOre, unswishedOre, leftOre };
