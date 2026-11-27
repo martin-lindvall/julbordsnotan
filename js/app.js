@@ -1,9 +1,9 @@
-import { getBackend } from './store.js?v=7';
-import { parseReceipt, parseKr } from './parse.js?v=7';
-import { sprite, iconFor } from './sprites.js?v=7';
-import { compute, kr, claimedOf } from './calc.js?v=7';
-import * as audio from './audio.js?v=7';
-import { startSnow, floatText, shake, confetti } from './fx.js?v=7';
+import { getBackend } from './store.js?v=8';
+import { parseReceipt, parseKr } from './parse.js?v=8';
+import { sprite, iconFor } from './sprites.js?v=8';
+import { compute, kr, claimedOf } from './calc.js?v=8';
+import * as audio from './audio.js?v=8';
+import { startSnow, floatText, shake, confetti } from './fx.js?v=8';
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
@@ -71,7 +71,8 @@ function renderCreate() {
       <h2 class="px h">1. VÄRDEN</h2>
       <label>Vad heter kalaset?<input id="c-title" value="Julbordet ${new Date().getFullYear()}" maxlength="60"></label>
       <label>Ditt namn<input id="c-host" placeholder="t.ex. Martin" maxlength="24" autocomplete="given-name"></label>
-      <label>Ditt Swish-nummer<input id="c-swish" placeholder="070-123 45 67" inputmode="tel" maxlength="20" autocomplete="tel"></label>
+      <label>Ditt Swish-nummer (valfritt)<input id="c-swish" placeholder="070-123 45 67" inputmode="tel" maxlength="20" autocomplete="tel"></label>
+      <p class="hint">Numret syns för alla som har länken. Lämna tomt om du hellre ger vännerna numret på annat sätt – då visas bara ditt namn och beloppet.</p>
     </section>
 
     <section class="panel">
@@ -164,7 +165,7 @@ function renderCreate() {
     const items = all.filter((r) => r.qty > 0 && r.name && r.unitOre > 0).map((r, i) => ({ id: 'i' + i, name: r.name, qty: r.qty, unitOre: r.unitOre }));
     const fail = (m) => { err.textContent = m; audio.play('nope'); shake(e.target); };
     if (!host) return fail('Skriv ditt namn.');
-    if (!/^[\d\s+()-]{6,}$/.test(swish)) return fail('Skriv ett giltigt Swish-nummer.');
+    if (swish && !/^[\d\s+()-]{6,}$/.test(swish)) return fail('Swish-numret ser konstigt ut – rätta det eller lämna tomt.');
     if (bad.length) return fail(`${bad.length} rad(er) saknar antal, namn eller pris.`);
     if (!items.length) return fail('Lägg till minst en vara.');
     if (tipOre < 0) return fail('Dricksen kan inte vara negativ.');
@@ -175,7 +176,7 @@ function renderCreate() {
       const hostId = 'p' + now.toString(36);
       const bill = {
         v: 1, title, createdAt: now, tipOre,
-        swish: { number: swish, name: host },
+        swish: swish ? { number: swish, name: host } : { name: host },
         items,
         people: { [hostId]: { name: host, joinedAt: now, claims: {}, paidOre: 0, host: true } },
       };
@@ -521,7 +522,7 @@ function renderBill(billId) {
     if (meP.host) {
       setHTML(box, `
         <h2 class="px h">DIN NOTA <span class="badge host">VÄRD</span></h2>
-        <p>Du är värden – vännerna swishar till dig (<b>${esc(swish.number)}</b>).</p>
+        <p>Du är värden – vännerna swishar till dig${swish.number ? ` (<b>${esc(swish.number)}</b>)` : '. Numret visas inte i appen, så se till att alla har det!'}</p>
         <p>Dina egna grejer: <b class="gold">${kr(meP.owedOre)}</b>${meP.tipOre ? ` <span class="muted">(inkl. ${kr(meP.tipOre)} dricks)</span>` : ''} – de räknas som betalda.</p>
         <p class="hint">Kom ihåg att plocka dina egna saker också, annars ser det ut som att något är oplockat!</p>`);
       dock.hidden = true;
@@ -540,7 +541,9 @@ function renderBill(billId) {
       ${meP.unpaidOre > 0 ? `
         <div class="swish">
           <div class="px label">SWISHA TILL ${esc((swish.name || '').toUpperCase())}</div>
-          <div class="swish-row"><span class="px swish-num">${esc(swish.number)}</span><button class="btn small ghost" data-copy="${esc((swish.number || '').replace(/[^\d+]/g, ''))}">KOPIERA</button></div>
+          ${swish.number
+            ? `<div class="swish-row"><span class="px swish-num">${esc(swish.number)}</span><button class="btn small ghost" data-copy="${esc(swish.number.replace(/[^\d+]/g, ''))}">KOPIERA</button></div>`
+            : `<p class="hint">Numret har du fått av ${esc(swish.name || 'värden')}.</p>`}
           <div class="swish-row"><span class="px swish-amt">${kr(meP.unpaidOre)}</span><button class="btn small ghost" data-copy="${(meP.unpaidOre / 100).toFixed(2).replace('.', ',').replace(',00', '')}">KOPIERA</button></div>
           <button class="btn big green" id="paid-btn">JAG HAR SWISHAT ${kr(meP.unpaidOre)} ✓</button>
         </div>` : ''}
