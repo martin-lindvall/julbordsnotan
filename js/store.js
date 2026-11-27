@@ -1,6 +1,6 @@
 // Storage adapter: Firebase Firestore when configured, otherwise localStorage (demo mode).
 // Every bill is ONE document so a claim can be done atomically in a transaction.
-import { FIREBASE_CONFIG } from './config.js?v=6';
+import { FIREBASE_CONFIG } from './config.js?v=7';
 
 const FB_VERSION = '10.12.2';
 let backendPromise;

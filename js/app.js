@@ -1,12 +1,14 @@
-import { getBackend } from './store.js?v=6';
-import { parseReceipt, parseKr } from './parse.js?v=6';
-import { sprite, iconFor } from './sprites.js?v=6';
-import { compute, kr, claimedOf } from './calc.js?v=6';
-import * as audio from './audio.js?v=6';
-import { startSnow, floatText, shake, confetti } from './fx.js?v=6';
+import { getBackend } from './store.js?v=7';
+import { parseReceipt, parseKr } from './parse.js?v=7';
+import { sprite, iconFor } from './sprites.js?v=7';
+import { compute, kr, claimedOf } from './calc.js?v=7';
+import * as audio from './audio.js?v=7';
+import { startSnow, floatText, shake, confetti } from './fx.js?v=7';
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
+// Only touch the DOM when the content really changed (keeps buttons alive, avoids flicker).
+const setHTML = (el, html) => { if (el.__html !== html) { el.__html = html; el.innerHTML = html; } };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const ls = {
@@ -272,8 +274,13 @@ function renderBill(billId) {
       return;
     }
     serverBill = data;
-    // changes the server has confirmed are now part of the snapshot
-    for (let i = pending.length - 1; i >= 0; i--) if (pending[i].done) pending.splice(i, 1);
+    // Drop our local changes only once THIS snapshot actually contains them. Snapshots can arrive
+    // after the save is acknowledged but still show older data; dropping too early made the
+    // screen jump back and made the next tap count from a stale number.
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const op = pending[i];
+      if (op.done && (op.rev == null || ((data.people[op.pid] || {}).rev || 0) >= op.rev)) pending.splice(i, 1);
+    }
     recompute();
     $('#loading').hidden = true;
     $('#bill').hidden = false;
@@ -293,13 +300,20 @@ function renderBill(billId) {
   // Throws immediately if the change isn't possible with what we can see (e.g. sold out).
   function change(fn, onFail) {
     const next = fn(structuredClone(bill));
-    const op = { fn, done: false };
+    const op = { fn, done: false, pid: me, rev: null };
     pending.push(op);
     bill = next;
     paint();
     setSync('saving');
+    // On the server, also bump this player's change counter so we can tell when a snapshot includes it.
+    const commit = (b) => {
+      const out = fn(b);
+      const p = out.people[op.pid];
+      if (p) { p.rev = (p.rev || 0) + 1; op.rev = p.rev; }
+      return out;
+    };
     queue = queue
-      .then(() => backend.mutate(billId, fn))
+      .then(() => backend.mutate(billId, commit))
       .then(
         () => { op.done = true; },
         (ex) => {
@@ -346,9 +360,9 @@ function renderBill(billId) {
     const runner = $('#runner');
     if (!runner.firstChild) runner.appendChild(sprite('tomte', 'md'));
     runner.style.left = `calc(${pct}% - ${pct / 100 * 32}px)`;
-    $('#sub').innerHTML = c.leftOre === 0
+    setHTML($('#sub'), c.leftOre === 0
       ? `<span class="ok px small">NOTAN ÄR NOLL! GOD JUL! 🎄</span>`
-      : `<span>🎁 Oplockat: <b>${kr(c.unclaimedOre)}</b></span><span>📱 Ej swishat: <b>${kr(c.unswishedOre)}</b></span><span class="muted">Totalt ${kr(c.totalOre)}${bill.tipOre ? ` (varav dricks ${kr(bill.tipOre)})` : ''}</span>`;
+      : `<span>🎁 Oplockat: <b>${kr(c.unclaimedOre)}</b></span><span>📱 Ej swishat: <b>${kr(c.unswishedOre)}</b></span><span class="muted">Totalt ${kr(c.totalOre)}${bill.tipOre ? ` (varav dricks ${kr(bill.tipOre)})` : ''}</span>`);
     if (prevLeft !== null && prevLeft > 0 && c.leftOre === 0) celebrate();
     prevLeft = c.leftOre;
 
@@ -421,32 +435,51 @@ function renderBill(billId) {
     };
   }
 
+  // Build the list once, then only update it in place. Re-creating the buttons on every update
+  // could swallow a tap that happened to land while the list was being rebuilt.
   function paintItems(c, joined) {
     const ul = $('#items');
     const myClaims = joined ? bill.people[me].claims || {} : {};
-    ul.innerHTML = '';
+    const shape = c.items.map((i) => i.id).join(',');
+    if (ul.dataset.shape !== shape) {
+      ul.dataset.shape = shape;
+      ul.innerHTML = '';
+      for (const it of c.items) {
+        const li = document.createElement('li');
+        li.className = 'item';
+        li.dataset.id = it.id;
+        li.innerHTML = `
+          <div class="icon"></div>
+          <div class="info">
+            <div class="name">${esc(it.name)}</div>
+            <div class="meta"><span class="gold">${kr(it.unitOre)}</span> · <span class="left"></span></div>
+            <div class="pips" aria-hidden="true"></div>
+          </div>
+          <div class="ctrl">
+            <button class="pm minus px" data-id="${it.id}" data-d="-1" aria-label="En mindre ${esc(it.name)}">−</button>
+            <span class="count px"></span>
+            <button class="pm plus px" data-id="${it.id}" data-d="1" aria-label="En till ${esc(it.name)}">+</button>
+          </div>`;
+        $('.icon', li).appendChild(sprite(iconFor(it.name), 'md'));
+        ul.appendChild(li);
+      }
+    }
     for (const it of c.items) {
+      const li = ul.querySelector(`li[data-id="${it.id}"]`);
       const mine = myClaims[it.id] || 0;
       const others = it.claimed - mine;
-      const li = document.createElement('li');
-      li.className = 'item' + (it.left === 0 ? ' soldout' : '') + (mine ? ' has' : '');
-      const pips = it.qty <= 24
-        ? `<div class="pips" aria-hidden="true">${'<i class="me"></i>'.repeat(mine)}${'<i class="other"></i>'.repeat(others)}${'<i></i>'.repeat(it.left)}</div>`
-        : '';
-      li.innerHTML = `
-        <div class="icon"></div>
-        <div class="info">
-          <div class="name">${esc(it.name)}</div>
-          <div class="meta"><span class="gold">${kr(it.unitOre)}</span> · <span class="${it.left ? '' : 'bad'}">${it.left ? `${it.left} av ${it.qty} kvar` : 'SLUT!'}</span></div>
-          ${pips}
-        </div>
-        <div class="ctrl">
-          <button class="pm minus px" data-id="${it.id}" data-d="-1" ${!joined || !mine ? 'disabled' : ''} aria-label="En mindre ${esc(it.name)}">−</button>
-          <span class="count px" aria-label="Du har ${mine}">${mine}</span>
-          <button class="pm plus px" data-id="${it.id}" data-d="1" ${!joined || !it.left ? 'disabled' : ''} aria-label="En till ${esc(it.name)}">+</button>
-        </div>`;
-      $('.icon', li).appendChild(sprite(iconFor(it.name), 'md'));
-      ul.appendChild(li);
+      li.classList.toggle('soldout', it.left === 0);
+      li.classList.toggle('has', mine > 0);
+      const left = $('.left', li);
+      left.textContent = it.left ? `${it.left} av ${it.qty} kvar` : 'SLUT!';
+      left.classList.toggle('bad', !it.left);
+      const pips = it.qty <= 24 ? '<i class="me"></i>'.repeat(mine) + '<i class="other"></i>'.repeat(others) + '<i></i>'.repeat(it.left) : '';
+      const pipsEl = $('.pips', li);
+      if (pipsEl.innerHTML !== pips) pipsEl.innerHTML = pips;
+      $('.count', li).textContent = mine;
+      $('.count', li).setAttribute('aria-label', `Du har ${mine}`);
+      $('.minus', li).disabled = !joined || !mine;
+      $('.plus', li).disabled = !joined || !it.left;
     }
     ul.onclick = async (e) => {
       const b = e.target.closest('.pm');
@@ -475,8 +508,7 @@ function renderBill(billId) {
         return;
       }
       audio.play(d > 0 ? 'up' : 'down');
-      const btn = document.querySelector(`.pm[data-id="${itemId}"][data-d="${d}"]`) || b;
-      floatText(btn, `${d > 0 ? '+' : '−'}${kr(item.unitOre)}`, d > 0 ? '' : 'bad');
+      floatText(b, `${d > 0 ? '+' : '−'}${kr(item.unitOre)}`, d > 0 ? '' : 'bad');
     };
   }
 
@@ -487,17 +519,17 @@ function renderBill(billId) {
     box.hidden = false;
     const swish = bill.swish || {};
     if (meP.host) {
-      box.innerHTML = `
+      setHTML(box, `
         <h2 class="px h">DIN NOTA <span class="badge host">VÄRD</span></h2>
         <p>Du är värden – vännerna swishar till dig (<b>${esc(swish.number)}</b>).</p>
         <p>Dina egna grejer: <b class="gold">${kr(meP.owedOre)}</b>${meP.tipOre ? ` <span class="muted">(inkl. ${kr(meP.tipOre)} dricks)</span>` : ''} – de räknas som betalda.</p>
-        <p class="hint">Kom ihåg att plocka dina egna saker också, annars ser det ut som att något är oplockat!</p>`;
+        <p class="hint">Kom ihåg att plocka dina egna saker också, annars ser det ut som att något är oplockat!</p>`);
       dock.hidden = true;
       return;
     }
     const paid = meP.paidOre || 0;
     const allPaid = meP.owedOre > 0 && meP.unpaidOre === 0;
-    box.innerHTML = `
+    setHTML(box, `
       <h2 class="px h">DIN NOTA</h2>
       <div class="receipt">
         ${c.items.filter((i) => (meP.claims || {})[i.id]).map((i) => `<div class="rl"><span>${meP.claims[i.id]} × ${esc(i.name)}</span><span>${kr(meP.claims[i.id] * i.unitOre)}</span></div>`).join('') || '<div class="muted">Inget plockat ännu.</div>'}
@@ -514,7 +546,7 @@ function renderBill(billId) {
         </div>` : ''}
       ${allPaid ? `<div class="done px">✓ BETALT! DU ÄR SNÄLL I ÅR 🎅</div>` : ''}
       ${meP.overpaidOre > 0 ? `<p class="hint">Du har swishat ${kr(meP.overpaidOre)} för mycket (t.ex. för att fler delar på dricksen nu). Snacka med ${esc(swish.name)}!</p>` : ''}
-      ${paid ? `<button class="linkish" id="unpay">Ångra "jag har swishat"</button>` : ''}`;
+      ${paid ? `<button class="linkish" id="unpay">Ångra "jag har swishat"</button>` : ''}`);
 
     box.onclick = async (e) => {
       const cp = e.target.closest('[data-copy]');
@@ -543,7 +575,7 @@ function renderBill(billId) {
     // sticky mini-bar on phones
     dock.hidden = meP.owedOre === 0;
     dock.className = 'dock px' + (allPaid ? ' paid' : '');
-    dock.innerHTML = allPaid ? `✓ BETALT ${kr(meP.owedOre)}` : `DIN NOTA: ${kr(meP.unpaidOre)} <span>SWISHA ▸</span>`;
+    setHTML(dock, allPaid ? `✓ BETALT ${kr(meP.owedOre)}` : `DIN NOTA: ${kr(meP.unpaidOre)} <span>SWISHA ▸</span>`);
     dock.onclick = () => box.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -565,7 +597,7 @@ function renderBill(billId) {
       }
       if (best) (titles[best] = titles[best] || []).push(label);
     }
-    ol.innerHTML = ranked.length ? ranked.map((p) => {
+    setHTML(ol, ranked.length ? ranked.map((p) => {
       let status;
       if (p.host) status = '<span class="badge host">VÄRD</span>';
       else if (p.owedOre === 0) status = '<span class="badge idle">HUNGRIG?</span>';
@@ -575,7 +607,7 @@ function renderBill(billId) {
       return `<li class="${p.id === me ? 'me' : ''}">
         <span class="who">${esc(p.name)}${p.id === me ? ' (du)' : ''}${t.length ? `<span class="titles">${t.map((x) => `<i>${x}</i>`).join('')}</span>` : ''}</span>
         <span class="amt">${kr(p.owedOre)}</span>${status}</li>`;
-    }).join('') : '<li class="muted">Ingen har gått med än.</li>';
+    }).join('') : '<li class="muted">Ingen har gått med än.</li>');
   }
 
   function coinRain(anchor) {
