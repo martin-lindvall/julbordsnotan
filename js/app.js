@@ -16,6 +16,8 @@ const ls = {
 
 let backend;
 let unsub = null;
+let onVisible = null;
+document.addEventListener('visibilitychange', () => onVisible && onVisible());
 
 // ---------------------------------------------------------------- shell
 function soundButtons() {
@@ -23,15 +25,17 @@ function soundButtons() {
   const paint = () => {
     bar.innerHTML = `
       <button class="chip px ${audio.isSfxOn() ? 'on' : ''}" data-s="sfx" aria-pressed="${audio.isSfxOn()}" title="Ljudeffekter">${audio.isSfxOn() ? '🔊' : '🔇'} LJUD</button>
-      <button class="chip px ${audio.isMusicOn() ? 'on' : ''}" data-s="music" aria-pressed="${audio.isMusicOn()}" title="Musik">♪ MUSIK</button>`;
+      <button class="chip px ${audio.isMusicOn() ? 'on' : ''} ${audio.isMusicOn() && !audio.isStarted() ? 'wait' : ''}" data-s="music" aria-pressed="${audio.isMusicOn()}" title="Musik">♪ MUSIK</button>`;
   };
   bar.addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
+    if (b.dataset.s === 'music' && audio.isMusicOn() && audio.justStarted()) { paint(); return; } // first tap just started it
     b.dataset.s === 'sfx' ? audio.toggleSfx() : audio.toggleMusic();
     paint();
   });
   paint();
+  return paint;
 }
 
 function demoBanner() {
@@ -42,6 +46,7 @@ function demoBanner() {
 
 function route() {
   if (unsub) { unsub(); unsub = null; }
+  onVisible = null;
   const m = location.hash.match(/^#\/b\/([a-z0-9]+)/i);
   window.scrollTo(0, 0);
   if (m) renderBill(m[1]);
@@ -210,6 +215,7 @@ function renderBill(billId) {
         <div class="px big" id="left"></div>
         <div class="track" id="track"><div class="fill" id="fill"></div><div class="runner" id="runner"></div></div>
         <div class="sub" id="sub"></div>
+        <div class="sync px" id="sync" data-state="saving" aria-live="polite">◌ ANSLUTER…</div>
       </section>
 
       <section class="panel" id="join" hidden></section>
@@ -240,31 +246,90 @@ function renderBill(billId) {
   });
 
   let me = ls.get('jn:me:' + billId);
-  let bill = null;
+  let bill = null; // what we show: server state + our not-yet-confirmed changes
+  let serverBill = null; // last state the database sent us
   let prevLeft = null;
   let joinShown = false;
-  let busy = false;
+  // Optimistic updates. Every change is an idempotent "set" (e.g. "my count of X is 3"),
+  // so re-applying it on top of a newer server snapshot is always safe.
+  const pending = [];
+  let queue = Promise.resolve();
 
-  unsub = backend.subscribe(billId, (data, error) => {
+  function recompute() {
+    let b = structuredClone(serverBill);
+    for (const op of pending) {
+      try { b = op.fn(structuredClone(b)); } catch { /* conflicts with server state – the save will report it */ }
+    }
+    bill = b;
+  }
+
+  function onSnap(data, error) {
     if (error || !data) {
+      if (serverBill && error) { setSync('offline'); return; } // keep showing what we have
       $('#loading').innerHTML = error
         ? `KUNDE INTE LADDA NOTAN<br><span class="small">${esc(error.message)}</span>`
         : `NOTAN HITTADES INTE 🎄<br><a href="#/">Skapa en ny</a>`;
       return;
     }
-    bill = data;
+    serverBill = data;
+    // changes the server has confirmed are now part of the snapshot
+    for (let i = pending.length - 1; i >= 0; i--) if (pending[i].done) pending.splice(i, 1);
+    recompute();
     $('#loading').hidden = true;
     $('#bill').hidden = false;
+    if (!pending.length) setSync('ok');
     paint();
-  });
-
-  async function mutate(fn) {
-    if (busy) return false;
-    busy = true;
-    try { await backend.mutate(billId, fn); return true; }
-    catch (ex) { console.warn(ex); return ex; }
-    finally { busy = false; }
   }
+  unsub = backend.subscribe(billId, onSnap);
+
+  function setSync(state) {
+    const el = $('#sync');
+    if (!el) return;
+    el.dataset.state = state;
+    el.textContent = { ok: '● SPARAT', saving: '◌ SPARAR…', offline: '✕ INGEN KONTAKT – FÖRSÖKER IGEN' }[state];
+  }
+
+  // Apply fn locally right away, then save it in the background (one save at a time, in order).
+  // Throws immediately if the change isn't possible with what we can see (e.g. sold out).
+  function change(fn, onFail) {
+    const next = fn(structuredClone(bill));
+    const op = { fn, done: false };
+    pending.push(op);
+    bill = next;
+    paint();
+    setSync('saving');
+    queue = queue
+      .then(() => backend.mutate(billId, fn))
+      .then(
+        () => { op.done = true; },
+        (ex) => {
+          console.warn(ex);
+          pending.splice(pending.indexOf(op), 1);
+          if (serverBill) recompute();
+          paint();
+          toast(/slut/i.test(ex.message) ? 'Någon hann före – den är slut!' : 'Kunde inte spara: ' + ex.message);
+          audio.play('nope');
+          if (onFail) onFail(ex);
+        },
+      )
+      .then(() => { if (!pending.some((p) => !p.done)) setSync('ok'); });
+  }
+
+  function toast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast px';
+    t.setAttribute('role', 'alert');
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+  }
+
+  // When the phone wakes up / the tab comes back, re-subscribe to be sure we show fresh data.
+  onVisible = () => {
+    if (document.visibilityState !== 'visible' || !unsub) return;
+    unsub();
+    unsub = backend.subscribe(billId, onSnap);
+  };
 
   function paint() {
     const c = compute(bill);
@@ -324,19 +389,18 @@ function renderBill(billId) {
       const taken = Object.values(bill.people).some((p) => p.name.toLowerCase() === name.toLowerCase());
       if (taken) { audio.play('nope'); shake(btn); floatText(btn, 'NAMNET ÄR TAGET', 'bad'); return; }
       const id = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
-      btn.disabled = true;
-      const res = await mutate((b) => {
-        b.people[id] = { name, joinedAt: Date.now(), claims: {}, paidOre: 0, host: false };
+      const joinedAt = Date.now();
+      me = id;
+      ls.set('jn:me:' + billId, id);
+      change((b) => {
+        if (!b.people[id]) {
+          if (Object.values(b.people).some((p) => p.name.toLowerCase() === name.toLowerCase())) throw new Error('Namnet är redan taget');
+          b.people[id] = { name, joinedAt, claims: {}, paidOre: 0, host: false };
+        }
         return b;
-      });
-      btn.disabled = false;
-      if (res === true) {
-        me = id;
-        ls.set('jn:me:' + billId, id);
-        audio.play('join');
-        paint();
-        $('#items-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      } else { audio.play('nope'); shake(btn); }
+      }, () => { me = null; ls.set('jn:me:' + billId, null); joinShown = false; paint(); });
+      audio.play('join');
+      $('#items-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
@@ -390,27 +454,29 @@ function renderBill(billId) {
       const itemId = b.dataset.id;
       const d = +b.dataset.d;
       const item = bill.items.find((i) => i.id === itemId);
-      let reason = '';
-      const res = await mutate((fresh) => {
-        const p = fresh.people[me];
-        if (!p) throw new Error('Du finns inte på notan');
-        const it = fresh.items.find((i) => i.id === itemId);
-        const cur = (p.claims || {})[itemId] || 0;
-        if (d > 0 && claimedOf(fresh, itemId) + d > it.qty) { reason = 'SLUT!'; throw new Error('slut'); }
-        if (cur + d < 0) throw new Error('negativt');
-        p.claims = p.claims || {};
-        if (cur + d) p.claims[itemId] = cur + d; else delete p.claims[itemId];
-        return fresh;
-      });
-      if (res === true) {
-        audio.play(d > 0 ? 'up' : 'down');
-        const btn = document.querySelector(`.pm[data-id="${itemId}"][data-d="${d}"]`) || b;
-        floatText(btn, `${d > 0 ? '+' : '−'}${kr(item.unitOre)}`, d > 0 ? '' : 'bad');
-      } else if (res !== false) {
+      const pid = me;
+      const want = ((bill.people[pid].claims || {})[itemId] || 0) + d;
+      try {
+        change((fresh) => {
+          const p = fresh.people[pid];
+          if (!p) throw new Error('Du finns inte på notan');
+          const it = fresh.items.find((i) => i.id === itemId);
+          const cur = (p.claims || {})[itemId] || 0;
+          if (want < 0) throw new Error('negativt');
+          if (claimedOf(fresh, itemId) - cur + want > it.qty) throw new Error('slut');
+          p.claims = p.claims || {};
+          if (want) p.claims[itemId] = want; else delete p.claims[itemId];
+          return fresh;
+        });
+      } catch (ex) {
         audio.play('nope');
         shake(b.closest('.item') || b);
-        if (reason) floatText(b, reason, 'bad');
+        if (/slut/.test(ex.message)) floatText(b, 'SLUT!', 'bad');
+        return;
       }
+      audio.play(d > 0 ? 'up' : 'down');
+      const btn = document.querySelector(`.pm[data-id="${itemId}"][data-d="${d}"]`) || b;
+      floatText(btn, `${d > 0 ? '+' : '−'}${kr(item.unitOre)}`, d > 0 ? '' : 'bad');
     };
   }
 
@@ -458,13 +524,19 @@ function renderBill(billId) {
       }
       if (e.target.id === 'paid-btn') {
         const amount = meP.unpaidOre;
-        const res = await mutate((b) => { const p = b.people[me]; p.paidOre = (p.paidOre || 0) + amount; p.paidAt = Date.now(); return b; });
-        if (res === true) { audio.play('coin'); floatText(e.target, `+${kr(amount)} TILL ${(swish.name || 'VÄRDEN').toUpperCase()}`); coinRain(e.target); }
+        const total = (meP.paidOre || 0) + amount;
+        const pid = me;
+        const at = Date.now();
+        floatText(e.target, `+${kr(amount)} TILL ${(swish.name || 'VÄRDEN').toUpperCase()}`);
+        coinRain(e.target);
+        audio.play('coin');
+        change((b) => { b.people[pid].paidOre = total; b.people[pid].paidAt = at; return b; });
       }
       if (e.target.id === 'unpay') {
         if (!confirm('Ångra din betalning?')) return;
-        const res = await mutate((b) => { b.people[me].paidOre = 0; return b; });
-        if (res === true) audio.play('down');
+        const pid = me;
+        change((b) => { b.people[pid].paidOre = 0; return b; });
+        audio.play('down');
       }
     };
 
@@ -533,8 +605,8 @@ function renderBill(billId) {
 // ---------------------------------------------------------------- boot
 (async function boot() {
   startSnow();
-  soundButtons();
-  audio.unlockOnGesture();
+  const repaintSound = soundButtons();
+  audio.unlockOnGesture(repaintSound);
   try {
     backend = await getBackend();
   } catch (e) {

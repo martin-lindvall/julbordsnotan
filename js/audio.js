@@ -3,7 +3,7 @@
 
 let ctx, master, sfxBus, musicBus, noiseBuf, crackle;
 let sfxOn = load('jn:sfx', true);
-let musicOn = load('jn:music', false);
+let musicOn = load('jn:music', true);
 let timer = null, nextTime = 0, step = 0;
 
 function load(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v === '1'; } catch { return d; } }
@@ -106,44 +106,75 @@ export function play(name) {
   }
 }
 
-// ---------- music ----------
-const BPM = 72;
-const STEP = 60 / BPM / 4; // 16th notes
-const CHORDS = [
-  { root: 41, notes: [53, 57, 60, 64] }, // Fmaj7
-  { root: 40, notes: [52, 55, 59, 62] }, // Em7
-  { root: 38, notes: [50, 53, 57, 60] }, // Dm7
-  { root: 43, notes: [53, 55, 59, 62] }, // G7
-];
-const _ = null;
-const MELODY = [
-  76, _, _, 72, _, _, 74, _, 76, _, 79, _, _, _, _, _,
-  74, _, _, 71, _, _, 72, _, 74, _, _, _, 67, _, _, _,
-  72, _, _, 69, _, _, 72, _, 74, _, 76, _, _, 77, _, 76,
-  74, _, _, _, 71, _, _, _, 67, _, 69, _, 71, _, _, _,
-];
+// ---------- music: lo-fi "Jingle Bells" (J. Pierpont, 1857 – public domain) ----------
+const BPM = 88;
+const STEP = 60 / BPM / 2; // 8th notes
+const BAR = 8; // 8ths per bar
+
+const CH = {
+  Cmaj9: [36, [52, 55, 59, 62]], Am9: [45, [55, 59, 60, 64]], Fmaj7: [41, [53, 57, 60, 64]],
+  Dm9: [38, [53, 57, 60, 64]], G13: [43, [53, 57, 59, 64]], G7: [43, [53, 55, 59, 62]],
+  C9: [36, [52, 55, 58, 62]], Em7: [40, [55, 59, 62, 64]], A7: [45, [55, 61, 64, 67]],
+  D9: [38, [54, 57, 60, 64]],
+};
+// one entry per bar; "X Y" = two chords, half a bar each (lo-fi jazz reharmonisation)
+const CHORD_BARS = (
+  'Cmaj9 Cmaj9 Cmaj9 Fmaj7 Dm9 G13 G7 Cmaj9 Cmaj9 Cmaj9 Cmaj9 Fmaj7 Dm9 Em7/A7 Dm9/G7 Cmaj9 ' +
+  'Cmaj9 Am9 Cmaj9 C9 Fmaj7 Cmaj9 D9 G13 Cmaj9 Am9 Cmaj9 C9 Fmaj7 Em7/A7 Dm9/G7 Cmaj9'
+).split(' ').map((b) => b.split('/'));
+
+// melody: note:duration-in-quarter-notes, bars separated by |
+const TUNE = `
+G4 E5 D5 C5 | G4:3 G4:.5 G4:.5 | G4 E5 D5 C5 | A4:4 |
+A4 F5 E5 D5 | B4:4 | G5 G5 F5 D5 | E5:4 |
+G4 E5 D5 C5 | G4:4 | G4 E5 D5 C5 | A4:3 A4 |
+A4 F5 E5 D5 | G5 G5 G5 G5 | A5 G5 F5 D5 | C5:4 |
+E5 E5 E5:2 | E5 E5 E5:2 | E5 G5 C5:1.5 D5:.5 | E5:4 |
+F5 F5 F5:1.5 F5:.5 | F5 E5 E5 E5:.5 E5:.5 | E5 D5 D5 E5 | D5:2 G5:2 |
+E5 E5 E5:2 | E5 E5 E5:2 | E5 G5 C5:1.5 D5:.5 | E5:4 |
+F5 F5 F5:1.5 F5:.5 | F5 E5 E5 E5:.5 E5:.5 | G5 G5 F5 D5 | C5:4`;
+
+const NOTE = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const MELODY = new Map(); // 8th-step -> [midi, quarters]
+(() => {
+  let pos = 0; // in quarters
+  for (const tok of TUNE.replace(/\|/g, ' ').trim().split(/\s+/)) {
+    const [n, d = '1'] = tok.split(':');
+    const midi = 12 * (+n.slice(-1) + 1) + NOTE[n[0]];
+    MELODY.set(Math.round(pos * 2), [midi, +d]);
+    pos += +d;
+  }
+})();
+const LOOP = CHORD_BARS.length * BAR;
 
 function schedule(s, t) {
-  const bar = Math.floor(s / 16) % 4;
-  const pos = s % 16;
-  const ch = CHORDS[bar];
-  const swing = s % 2 === 1 ? STEP * 0.28 : 0;
-  const tt = t + swing;
-  if (pos === 0) {
-    ch.notes.forEach((m, i) => {
-      tone({ freq: mtof(m), t: t + i * 0.02, dur: STEP * 15, vol: 0.035, type: 'triangle', dest: musicBus, attack: 0.25, detune: (i % 2 ? 6 : -6) });
-    });
+  const bar = Math.floor(s / BAR);
+  const pos = s % BAR;
+  const half = pos < 4 ? 0 : 1;
+  const names = CHORD_BARS[bar];
+  const [root, notes] = CH[names[Math.min(half, names.length - 1)]];
+  const tt = t + (s % 2 === 1 ? STEP * 0.3 : 0); // swing the off-beats
+  const chordChange = pos === 0 || (pos === 4 && names.length > 1);
+  if (chordChange) {
+    const len = names.length > 1 ? 4 : 8;
+    notes.forEach((m, i) => tone({ freq: mtof(m), t: t + i * 0.025, dur: STEP * len, vol: 0.03, type: 'triangle', dest: musicBus, attack: 0.15, detune: i % 2 ? 7 : -7 }));
+    tone({ freq: mtof(root), t, dur: STEP * 2.6, vol: 0.17, type: 'triangle', dest: musicBus });
   }
-  if (pos === 0 || pos === 10) tone({ freq: mtof(ch.root), t: tt, dur: STEP * 5, vol: 0.16, type: 'triangle', dest: musicBus, attack: 0.01 });
-  // kick
-  if (pos === 0 || pos === 7 || pos === 10) tone({ freq: 120, to: 45, t: tt, dur: 0.18, vol: 0.35, type: 'sine', dest: musicBus });
-  // dusty snare
-  if (pos === 4 || pos === 12) noise({ t: tt, dur: 0.14, vol: 0.12, bp: 1800, dest: musicBus });
-  // sleigh bells
-  if (pos % 2 === 0) noise({ t: tt, dur: 0.04, vol: pos % 4 === 2 ? 0.05 : 0.025, hp: 9000, dest: musicBus });
-  if (pos % 4 === 2) noise({ t: tt + 0.05, dur: 0.03, vol: 0.02, hp: 10000, dest: musicBus });
-  const m = MELODY[s % 64];
-  if (m) tone({ freq: mtof(m), t: tt, dur: STEP * 3.2, vol: 0.05, type: 'square', dest: musicBus, attack: 0.01, detune: Math.random() * 8 - 4 });
+  if (pos === 5 && names.length === 1) tone({ freq: mtof(root + 7), t: tt, dur: STEP * 2, vol: 0.12, type: 'triangle', dest: musicBus });
+  // soft "keys" comp stabs on the and-of-2 and and-of-4
+  if (pos === 3 || pos === 7) notes.forEach((m) => tone({ freq: mtof(m + 12), t: tt, dur: STEP * 0.8, vol: 0.012, type: 'square', dest: musicBus }));
+  // drums: kick, dusty snare, sleigh bells on every 8th (it IS jingle bells)
+  if (pos === 0 || pos === 5) tone({ freq: 115, to: 42, t: tt, dur: 0.2, vol: 0.33, type: 'sine', dest: musicBus });
+  if (pos === 2 || pos === 6) noise({ t: tt, dur: 0.15, vol: 0.1, bp: 1700, dest: musicBus });
+  noise({ t: tt, dur: 0.05, vol: pos % 2 ? 0.022 : 0.045, hp: 9000, dest: musicBus });
+  noise({ t: tt + 0.04, dur: 0.03, vol: 0.015, hp: 10500, dest: musicBus });
+  const mel = MELODY.get(s);
+  if (mel) {
+    const [m, q] = mel;
+    const d = Math.max(STEP * 1.6, q * 2 * STEP * 0.92);
+    tone({ freq: mtof(m), t: tt, dur: d, vol: 0.075, type: 'triangle', dest: musicBus, attack: 0.008, detune: Math.random() * 10 - 5 });
+    tone({ freq: mtof(m), t: tt, dur: Math.min(d, 0.5), vol: 0.025, type: 'square', dest: musicBus, attack: 0.008 });
+  }
 }
 
 function startCrackle() {
@@ -173,7 +204,7 @@ function startMusic() {
     while (nextTime < ctx.currentTime + 0.2) {
       schedule(step, nextTime);
       nextTime += STEP;
-      step = (step + 1) % 64;
+      step = (step + 1) % LOOP;
     }
   }, 30);
 }
@@ -195,14 +226,24 @@ export function toggleMusic() {
   musicOn ? startMusic() : stopMusic();
   return musicOn;
 }
-// Browsers only allow audio after a user gesture: resume remembered music on first tap.
-export function unlockOnGesture() {
+// Browsers never allow sound before the first tap/click/key press on the page.
+// Music is on by default and starts on that first interaction.
+let started = false;
+let startedAt = 0;
+export const isStarted = () => started;
+// true for the gesture that unlocked audio, so that tap isn't also treated as a toggle
+export const justStarted = () => performance.now() - startedAt < 1000;
+export function unlockOnGesture(onStart) {
+  const evs = ['pointerdown', 'touchend', 'click', 'keydown'];
   const go = () => {
-    ensure();
+    // iOS: play through the silent switch like a music app (Safari 16.4+)
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* ignore */ }
+    if (!ensure()) return;
     if (musicOn) startMusic();
-    window.removeEventListener('pointerdown', go);
-    window.removeEventListener('keydown', go);
+    started = true;
+    startedAt = performance.now();
+    evs.forEach((e) => window.removeEventListener(e, go, true));
+    if (onStart) onStart();
   };
-  window.addEventListener('pointerdown', go);
-  window.addEventListener('keydown', go);
+  evs.forEach((e) => window.addEventListener(e, go, true));
 }
