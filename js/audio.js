@@ -107,7 +107,7 @@ export function play(name) {
 }
 
 // ---------- music: lo-fi "Jingle Bells" (J. Pierpont, 1857 – public domain) ----------
-const BPM = 88;
+const BPM = 94;
 const STEP = 60 / BPM / 2; // 8th notes
 const BAR = 8; // 8ths per bar
 
@@ -119,20 +119,20 @@ const CH = {
 };
 // one entry per bar; "X Y" = two chords, half a bar each (lo-fi jazz reharmonisation)
 const CHORD_BARS = (
-  'Cmaj9 Cmaj9 Cmaj9 Fmaj7 Dm9 G13 G7 Cmaj9 Cmaj9 Cmaj9 Cmaj9 Fmaj7 Dm9 Em7/A7 Dm9/G7 Cmaj9 ' +
-  'Cmaj9 Am9 Cmaj9 C9 Fmaj7 Cmaj9 D9 G13 Cmaj9 Am9 Cmaj9 C9 Fmaj7 Em7/A7 Dm9/G7 Cmaj9'
+  'Cmaj9 Am9 Cmaj9 C9 Fmaj7 Cmaj9 D9 G13 Cmaj9 Am9 Cmaj9 C9 Fmaj7 Em7/A7 Dm9/G7 Cmaj9 ' + // chorus
+  'Cmaj9 Cmaj9 Cmaj9 Fmaj7 Dm9 G13 G7 Cmaj9 Cmaj9 Cmaj9 Cmaj9 Fmaj7 Dm9 Em7/A7 Dm9/G7 Cmaj9' // verse
 ).split(' ').map((b) => b.split('/'));
 
 // melody: note:duration-in-quarter-notes, bars separated by |
 const TUNE = `
-G4 E5 D5 C5 | G4:3 G4:.5 G4:.5 | G4 E5 D5 C5 | A4:4 |
-A4 F5 E5 D5 | B4:4 | G5 G5 F5 D5 | E5:4 |
-G4 E5 D5 C5 | G4:4 | G4 E5 D5 C5 | A4:3 A4 |
-A4 F5 E5 D5 | G5 G5 G5 G5 | A5 G5 F5 D5 | C5:4 |
 E5 E5 E5:2 | E5 E5 E5:2 | E5 G5 C5:1.5 D5:.5 | E5:4 |
 F5 F5 F5:1.5 F5:.5 | F5 E5 E5 E5:.5 E5:.5 | E5 D5 D5 E5 | D5:2 G5:2 |
 E5 E5 E5:2 | E5 E5 E5:2 | E5 G5 C5:1.5 D5:.5 | E5:4 |
-F5 F5 F5:1.5 F5:.5 | F5 E5 E5 E5:.5 E5:.5 | G5 G5 F5 D5 | C5:4`;
+F5 F5 F5:1.5 F5:.5 | F5 E5 E5 E5:.5 E5:.5 | G5 G5 F5 D5 | C5:4 |
+G4 E5 D5 C5 | G4:3 G4:.5 G4:.5 | G4 E5 D5 C5 | A4:4 |
+A4 F5 E5 D5 | B4:4 | G5 G5 F5 D5 | E5:4 |
+G4 E5 D5 C5 | G4:4 | G4 E5 D5 C5 | A4:3 A4 |
+A4 F5 E5 D5 | G5 G5 G5 G5 | A5 G5 F5 D5 | C5:4`;
 
 const NOTE = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 const MELODY = new Map(); // 8th-step -> [midi, quarters]

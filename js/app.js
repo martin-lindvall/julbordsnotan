@@ -1,9 +1,9 @@
-import { getBackend } from './store.js';
-import { parseReceipt, parseKr } from './parse.js';
-import { sprite, iconFor } from './sprites.js';
-import { compute, kr, claimedOf } from './calc.js';
-import * as audio from './audio.js';
-import { startSnow, floatText, shake, confetti } from './fx.js';
+import { getBackend } from './store.js?v=6';
+import { parseReceipt, parseKr } from './parse.js?v=6';
+import { sprite, iconFor } from './sprites.js?v=6';
+import { compute, kr, claimedOf } from './calc.js?v=6';
+import * as audio from './audio.js?v=6';
+import { startSnow, floatText, shake, confetti } from './fx.js?v=6';
 
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app');
